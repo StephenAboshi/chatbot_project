@@ -100,24 +100,21 @@ def load_user(user_id):
 
 @app.route('/')
 def home():
-    if app.debug:  # This will be True when running locally with debug mode
-        return render_template('index.html')  # Make sure you have this template
-    else:
-        session.clear()
-        return redirect(QUALTRICS_URLS['entry'])
-
+    return render_template('index.html')
 @app.route('/test')
 def test_interface():
     return render_template('chat.html', task_description="This is a test task.")
 
 @app.route('/start_experiment')
-# @login_required
 def start_experiment():
-    session['task_order'] = ['control', 'social_compliance', 'kindness', 'need_greed']
-    random.shuffle(session['task_order'])
-    session['current_task_index'] = 0
-    logging.info(f"User {current_user.id} started experiment")
-    return redirect(url_for('pre_task_questionnaire'))
+    if 'DYNO' in os.environ:  # Check if running on Heroku
+        return redirect(QUALTRICS_URLS['entry'])
+    else:
+        session['task_order'] = ['control', 'social_compliance', 'kindness', 'need_greed']
+        random.shuffle(session['task_order'])
+        session['current_task_index'] = 0
+        logging.info("User started experiment")
+        return redirect(url_for('pre_task_questionnaire'))
 
 @app.route('/pre_task_questionnaire')
 @login_required
