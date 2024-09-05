@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Post-Task Questionnaire</title>
+</head>
+<body>
+    <h1>Post-Task Questionnaire</h1>
+    <form action="{{ url_for('submit_questionnaire') }}" method="post">
+        <input type="hidden" name="session_id" value="{{ session_id }}">
+        {% for i, question in enumerate(questions) %}
+        <div>
+            <p>{{ question.question }}</p>
+            <input type="range" name="question_{{ i }}" min="1" max="5" step="1">
+            <span>{{ question.scale_start }}</span>
+            <span>{{ question.scale_end }}</span>
+        </div>
+        {% endfor %}
+        <input type="submit" value="Submit">
+    </form>
+</body>
+</html>

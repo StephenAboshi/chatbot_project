@@ -1,0 +1,98 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+# Load the data
+df = pd.read_csv('metrics.csv')
+
+# Convert timestamp to datetime
+df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+# Sort by session_id and timestamp
+df = df.sort_values(['session_id', 'timestamp'])
+
+# Existing analysis code...
+
+# Time Series Analysis
+def perform_time_series_analysis(data, metric):
+    plt.figure(figsize=(12, 6))
+    for principle in data['principle'].unique():
+        principle_data = data[data['principle'] == principle]
+        plt.plot(principle_data['timestamp'], principle_data[metric], label=principle)
+    
+    plt.title(f'{metric.capitalize()} Over Time')
+    plt.xlabel('Time')
+    plt.ylabel(metric.capitalize())
+    plt.legend()
+    plt.savefig(f'{metric}_time_series.png')
+    plt.close()
+
+    # Perform decomposition
+    principle_data = data[data['principle'] == 'social_compliance']  # Example with one principle
+    principle_data = principle_data.set_index('timestamp')
+    decomposition = seasonal_decompose(principle_data[metric], model='additive', period=10)  # Adjust period as needed
+    
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 16))
+    decomposition.observed.plot(ax=ax1)
+    ax1.set_title('Observed')
+    decomposition.trend.plot(ax=ax2)
+    ax2.set_title('Trend')
+    decomposition.seasonal.plot(ax=ax3)
+    ax3.set_title('Seasonal')
+    decomposition.resid.plot(ax=ax4)
+    ax4.set_title('Residual')
+    plt.tight_layout()
+    plt.savefig(f'{metric}_decomposition.png')
+    plt.close()
+
+# Perform time series analysis for each metric
+metrics_to_analyze = ['engagement_score', 'sentiment_score', 'response_latency']
+for metric in metrics_to_analyze:
+    perform_time_series_analysis(df, metric)
+
+# Analysis of changes within sessions
+def analyze_within_session(data, metric):
+    data['message_number'] = data.groupby('session_id').cumcount() + 1
+    
+    plt.figure(figsize=(12, 6))
+    for principle in data['principle'].unique():
+        principle_data = data[data['principle'] == principle]
+        sns.lineplot(x='message_number', y=metric, data=principle_data, label=principle)
+    
+    plt.title(f'{metric.capitalize()} by Message Number')
+    plt.xlabel('Message Number')
+    plt.ylabel(metric.capitalize())
+    plt.legend()
+    plt.savefig(f'{metric}_by_message_number.png')
+    plt.close()
+
+# Analyze within-session changes for each metric
+for metric in metrics_to_analyze:
+    analyze_within_session(df, metric)
+
+# ARIMA modeling (if appropriate)
+def perform_arima_analysis(data, metric):
+    principle_data = data[data['principle'] == 'social_compliance']  # Example with one principle
+    principle_data = principle_data.set_index('timestamp')
+    
+    model = sm.tsa.ARIMA(principle_data[metric], order=(1,1,1))  # Adjust order as needed
+    results = model.fit()
+    
+    plt.figure(figsize=(12, 6))
+    plt.plot(principle_data.index, principle_data[metric], label='Observed')
+    plt.plot(principle_data.index, results.fittedvalues, color='red', label='ARIMA Fitted')
+    plt.title(f'ARIMA Model for {metric.capitalize()}')
+    plt.xlabel('Time')
+    plt.ylabel(metric.capitalize())
+    plt.legend()
+    plt.savefig(f'{metric}_arima_model.png')
+    plt.close()
+
+# Perform ARIMA analysis for each metric
+for metric in metrics_to_analyze:
+    perform_arima_analysis(df, metric)
+
+print("Time series analysis completed. Check the generated PNG files for visualizations.")
