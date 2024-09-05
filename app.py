@@ -85,13 +85,13 @@ class Metric(db.Model):
     total_messages = db.Column(db.Integer, default=0)
     session_length = db.Column(db.Float, default=0.0)
 QUALTRICS_URLS = {
-    'entry': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_3OtqRzQlztDavd4',
-    'pre_task': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_8upqVj1abPbOrz0',
-    'control': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_e5JcwmEb0HhEpBs',
-    'social_compliance': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_9LesibVlC1ubZBk',
-    'kindness': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_emv3zD3J6tcT6J0',
-    'need_greed': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_ebV92lxiiJoKSvs',
-    'exit': 'https://qfreeaccountssjc1.az1.qualtrics.com/jfe/form/SV_9WDqxZF2MF8w2cm'
+    'entry': 'https://strathsci.qualtrics.com/jfe/form/SV_41SNFusZdZiVTNQ',
+    'pre_task': 'https://strathsci.qualtrics.com/jfe/form/SV_3VO0y2y6yUXbWnk',
+    'control': 'https://strathsci.qualtrics.com/jfe/form/SV_291cpXO1p3sHAW2',
+    'social_compliance': 'https://strathsci.qualtrics.com/jfe/form/SV_e9foonvLvIGvWNU',
+    'kindness': 'https://strathsci.qualtrics.com/jfe/form/SV_bwnBNT2Y9qnTBNY',
+    'need_greed': 'https://strathsci.qualtrics.com/jfe/form/SV_bf0e41tDXEiAmnY',
+    'exit': 'https://strathsci.qualtrics.com/jfe/form/SV_d4OQp3bYeyjVvtY'
 }
 
 @login_manager.user_loader
@@ -355,10 +355,11 @@ def update_specific_metrics(metric, content, principle):
         else:
             metric.information_disclosure_rate = ((metric.information_disclosure_rate or 0) * (metric.total_messages - 2)) / metric.total_messages
 
-if __name__ == '__main__':
+def init_db():
     with app.app_context():
         db.create_all()
-    
+
+if __name__ == '__main__':
     # Check if running on Heroku
     if 'PORT' in os.environ:
         port = int(os.environ.get('PORT', 5000))
