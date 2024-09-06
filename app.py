@@ -34,7 +34,11 @@ llama = LlamaAPI(os.getenv('LLAMA_API_KEY'))
 
 login_manager = LoginManager()
 login_manager.init_app(app)
-
+def validate_prolific_params(prolific_pid, study_id, session_id):
+    if not all([prolific_pid, study_id, session_id]):
+        return False
+    # Add more specific validation if needed, e.g., length checks, format checks
+    return True
 sentry_sdk.init(
     dsn=os.getenv('SENTRY_DSN'),
     integrations=[FlaskIntegration()]
@@ -146,12 +150,14 @@ def start_experiment():
             return "Participant not found", 404
         
         participant.completed_entry_questionnaire = True
+        if not participant.task_order:
+            participant.task_order = ','.join(random.sample(['control', 'social_compliance', 'kindness', 'need_greed'], 4))
+        participant.current_task_index = 0
         db.session.commit()
         
         return redirect(url_for('pre_task_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
     else:
-        session['task_order'] = ['control', 'social_compliance', 'kindness', 'need_greed']
-        random.shuffle(session['task_order'])
+        session['task_order'] = random.sample(['control', 'social_compliance', 'kindness', 'need_greed'], 4)
         session['current_task_index'] = 0
         logging.info("User started experiment")
         return redirect(url_for('pre_task_questionnaire'))
@@ -185,30 +191,36 @@ def start_task():
             study_id = request.args.get('STUDY_ID')
             session_id = request.args.get('SESSION_ID')
             
+            if not validate_prolific_params(prolific_pid, study_id, session_id):
+                logging.error("Invalid Prolific parameters")
+                return jsonify({"error": "Invalid Prolific parameters"}), 400
+            
             participant = Participant.query.get(prolific_pid)
             if not participant:
+                logging.error(f"Participant not found: {prolific_pid}")
                 return jsonify({"error": "Participant not found"}), 404
 
             task_order = participant.task_order.split(',')
             if participant.current_task_index >= len(task_order):
-                logging.info(f"Participant completed all tasks")
+                logging.info(f"Participant completed all tasks: {prolific_pid}")
                 return redirect(url_for('exit_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
 
             current_task = task_order[participant.current_task_index]
         else:
             if 'task_order' not in session:
+                logging.error("Experiment not started (local)")
                 return jsonify({"error": "Experiment not started"}), 400
 
             if session['current_task_index'] >= len(session['task_order']):
-                logging.info(f"User completed all tasks")
+                logging.info("User completed all tasks (local)")
                 return redirect(url_for('exit_questionnaire'))
 
             current_task = session['task_order'][session['current_task_index']]
+            prolific_pid = study_id = session_id = None  # Set to None for local testing
 
         task = db.session.execute(select(Task).filter_by(principle=current_task)).scalar_one_or_none()
-
         if not task:
-            logging.error(f"Invalid task")
+            logging.error(f"Invalid task: {current_task}")
             return jsonify({"error": "Invalid task"}), 400
 
         new_session = Session(task_id=task.id)
@@ -216,15 +228,14 @@ def start_task():
         db.session.commit()
 
         session['current_session_id'] = new_session.id
-        logging.info(f"Started task {current_task}")
+        logging.info(f"Started task {current_task} for {'Prolific user' if 'DYNO' in os.environ else 'local user'}")
 
-        # Instead of returning JSON, we now render the chat interface
         return render_template('chat.html', 
                                task_description=task.description, 
                                session_id=new_session.id,
-                               PROLIFIC_PID=prolific_pid if 'DYNO' in os.environ else None,
-                               STUDY_ID=study_id if 'DYNO' in os.environ else None,
-                               SESSION_ID=session_id if 'DYNO' in os.environ else None)
+                               PROLIFIC_PID=prolific_pid,
+                               STUDY_ID=study_id,
+                               SESSION_ID=session_id)
     except Exception as e:
         logging.error(f"Error in start_task: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -323,13 +334,13 @@ def end_task():
             if not participant:
                 return jsonify({"error": "Participant not found"}), 404
 
-            qualtrics_url = (f"{QUALTRICS_URLS['post_task']}"
+            qualtrics_url = (f"{QUALTRICS_URLS[current_session.task.principle]}"
                              f"?PROLIFIC_PID={prolific_pid}"
                              f"&STUDY_ID={study_id}"
                              f"&SESSION_ID={session_id}"
                              f"&TASK_INDEX={participant.current_task_index}")
         else:
-            qualtrics_url = (f"{QUALTRICS_URLS['post_task']}"
+            qualtrics_url = (f"{QUALTRICS_URLS[current_session.task.principle]}"
                              f"?TASK_INDEX={session['current_task_index']}")
         
         return jsonify({"redirect": qualtrics_url})
@@ -478,10 +489,8 @@ def init_db():
         db.create_all()
 
 if __name__ == '__main__':
-    # Check if running on Heroku
-    if 'PORT' in os.environ:
-        port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5000))
+    if 'DYNO' in os.environ:  # This checks if we're on Heroku
         app.run(host='0.0.0.0', port=port)
     else:
-        # Running locally
-        app.run(debug=True)
+        app.run(host='127.0.0.1', port=port, debug=True)
