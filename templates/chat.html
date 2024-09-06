@@ -123,29 +123,54 @@
 
     <script>
     let currentSessionId;
+    let prolificPID;
+    let studyID;
+    let sessionID;
 
     function startTask() {
-    fetch('/start_task')
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => { throw err; });
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        currentSessionId = data.session_id;
-        document.getElementById('task-description').textContent = data.task_description;
-        document.getElementById('chat-container').innerHTML = '<div id="typing-indicator">Bot is typing...</div>';
+        // Get Prolific parameters from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        prolificPID = urlParams.get('PROLIFIC_PID');
+        studyID = urlParams.get('STUDY_ID');
+        sessionID = urlParams.get('SESSION_ID');
+
+        // Use the session_id passed from the server
+        currentSessionId = '{{ session_id }}';
+        document.getElementById('task-description').textContent = '{{ task_description }}';
         displayMessage("Hi! How can I help you today?", true);
-    })
-    .catch(error => {
-        console.error('Error starting task:', error);
-        alert('Error starting task: ' + error.message);
-    });
-}
+    }
+
+    function endTask() {
+        fetch('/end_task', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                PROLIFIC_PID: prolificPID,
+                STUDY_ID: studyID,
+                SESSION_ID: sessionID
+            }),
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                console.error('No redirect URL provided');
+            }
+        })
+        .catch(error => {
+            console.error('Error ending task:', error);
+            alert('Error ending task. Please try again.');
+        });
+    }
 
    function sendMessage() {
     const input = document.getElementById('user-input');

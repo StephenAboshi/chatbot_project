@@ -4,6 +4,7 @@ from flask_migrate import Migrate
 from datetime import datetime, timezone
 import time
 import os
+import uuid
 import json
 import random
 from dotenv import load_dotenv
@@ -63,7 +64,13 @@ class Session(db.Model):
     end_time = db.Column(db.DateTime)
     is_completed = db.Column(db.Boolean, default=False)
     task = db.relationship('Task', backref='sessions')
-
+class Participant(db.Model):
+    id = db.Column(db.String(36), primary_key=True)
+    study_id = db.Column(db.String(36))
+    session_id = db.Column(db.String(36))
+    completed_entry_questionnaire = db.Column(db.Boolean, default=False)
+    task_order = db.Column(db.String(100))
+    current_task_index = db.Column(db.Integer, default=0)
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey('session.id'), nullable=False)
@@ -100,7 +107,29 @@ def load_user(user_id):
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    if 'DYNO' in os.environ:  # Check if running on Heroku
+        prolific_pid = request.args.get('PROLIFIC_PID')
+        study_id = request.args.get('STUDY_ID')
+        session_id = request.args.get('SESSION_ID')
+        
+        if not all([prolific_pid, study_id, session_id]):
+            return "Missing parameters. Please access this site through Prolific.", 400
+
+        participant = Participant.query.get(prolific_pid)
+        if not participant:
+            participant = Participant(id=prolific_pid, study_id=study_id, session_id=session_id)
+            db.session.add(participant)
+            db.session.commit()
+
+        qualtrics_url = (f"{QUALTRICS_URLS['entry']}"
+                         f"?PROLIFIC_PID={prolific_pid}"
+                         f"&STUDY_ID={study_id}"
+                         f"&SESSION_ID={session_id}")
+
+        return redirect(qualtrics_url)
+    else:
+        return render_template('index.html')
+
 @app.route('/test')
 def test_interface():
     return render_template('chat.html', task_description="This is a test task.")
@@ -108,33 +137,74 @@ def test_interface():
 @app.route('/start_experiment')
 def start_experiment():
     if 'DYNO' in os.environ:  # Check if running on Heroku
-        return redirect(QUALTRICS_URLS['entry'])
+        prolific_pid = request.args.get('PROLIFIC_PID')
+        study_id = request.args.get('STUDY_ID')
+        session_id = request.args.get('SESSION_ID')
+        
+        participant = Participant.query.get(prolific_pid)
+        if not participant:
+            return "Participant not found", 404
+        
+        participant.completed_entry_questionnaire = True
+        db.session.commit()
+        
+        return redirect(url_for('pre_task_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
     else:
         session['task_order'] = ['control', 'social_compliance', 'kindness', 'need_greed']
         random.shuffle(session['task_order'])
         session['current_task_index'] = 0
         logging.info("User started experiment")
         return redirect(url_for('pre_task_questionnaire'))
-
 @app.route('/pre_task_questionnaire')
-@login_required
 def pre_task_questionnaire():
-    logging.info(f"User {current_user.id} directed to pre-task questionnaire")
-    return redirect(QUALTRICS_URLS['pre_task'])
+    if 'DYNO' in os.environ:  # Check if running on Heroku
+        prolific_pid = request.args.get('PROLIFIC_PID')
+        study_id = request.args.get('STUDY_ID')
+        session_id = request.args.get('SESSION_ID')
+
+        participant = Participant.query.get(prolific_pid)
+        if not participant:
+            return "Participant not found", 404
+
+        qualtrics_url = (f"{QUALTRICS_URLS['pre_task']}"
+                         f"?PROLIFIC_PID={prolific_pid}"
+                         f"&STUDY_ID={study_id}"
+                         f"&SESSION_ID={session_id}"
+                         f"&TASK_INDEX={participant.current_task_index}")
+
+        return redirect(qualtrics_url)
+    else:
+        logging.info(f"User directed to pre-task questionnaire")
+        return redirect(QUALTRICS_URLS['pre_task'])
+
 @app.route('/start_task')
-# @login_required
 def start_task():
     try:
-        if 'task_order' not in session:
-            all_principles = ['control', 'social_compliance', 'kindness', 'need_greed']
-            session['task_order'] = random.sample(all_principles, len(all_principles))
-            session['current_task_index'] = 0
+        if 'DYNO' in os.environ:  # Check if running on Heroku
+            prolific_pid = request.args.get('PROLIFIC_PID')
+            study_id = request.args.get('STUDY_ID')
+            session_id = request.args.get('SESSION_ID')
+            
+            participant = Participant.query.get(prolific_pid)
+            if not participant:
+                return jsonify({"error": "Participant not found"}), 404
 
-        if session['current_task_index'] >= len(session['task_order']):
-            logging.info(f"User completed all tasks")
-            return jsonify({"error": "All tasks completed"}), 200
+            task_order = participant.task_order.split(',')
+            if participant.current_task_index >= len(task_order):
+                logging.info(f"Participant completed all tasks")
+                return redirect(url_for('exit_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
 
-        current_task = session['task_order'][session['current_task_index']]
+            current_task = task_order[participant.current_task_index]
+        else:
+            if 'task_order' not in session:
+                return jsonify({"error": "Experiment not started"}), 400
+
+            if session['current_task_index'] >= len(session['task_order']):
+                logging.info(f"User completed all tasks")
+                return redirect(url_for('exit_questionnaire'))
+
+            current_task = session['task_order'][session['current_task_index']]
+
         task = db.session.execute(select(Task).filter_by(principle=current_task)).scalar_one_or_none()
 
         if not task:
@@ -148,12 +218,13 @@ def start_task():
         session['current_session_id'] = new_session.id
         logging.info(f"Started task {current_task}")
 
-        session['current_task_index'] += 1
-
-        return jsonify({
-            "session_id": new_session.id,
-            "task_description": task.description
-        })
+        # Instead of returning JSON, we now render the chat interface
+        return render_template('chat.html', 
+                               task_description=task.description, 
+                               session_id=new_session.id,
+                               PROLIFIC_PID=prolific_pid if 'DYNO' in os.environ else None,
+                               STUDY_ID=study_id if 'DYNO' in os.environ else None,
+                               SESSION_ID=session_id if 'DYNO' in os.environ else None)
     except Exception as e:
         logging.error(f"Error in start_task: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -231,7 +302,6 @@ def add_message():
         db.session.rollback()
         logging.error(f"Error in add_message: {str(e)}")
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
-
 @app.route('/end_task', methods=['POST'])
 def end_task():
     try:
@@ -244,37 +314,88 @@ def end_task():
         current_session.is_completed = True
         db.session.commit()
         
-        task_principle = current_session.task.principle
-        questionnaire_url = QUALTRICS_URLS.get(task_principle, QUALTRICS_URLS['exit'])
+        if 'DYNO' in os.environ:  # Check if running on Heroku
+            prolific_pid = data.get('PROLIFIC_PID')
+            study_id = data.get('STUDY_ID')
+            session_id = data.get('SESSION_ID')
+            
+            participant = Participant.query.get(prolific_pid)
+            if not participant:
+                return jsonify({"error": "Participant not found"}), 404
+
+            qualtrics_url = (f"{QUALTRICS_URLS['post_task']}"
+                             f"?PROLIFIC_PID={prolific_pid}"
+                             f"&STUDY_ID={study_id}"
+                             f"&SESSION_ID={session_id}"
+                             f"&TASK_INDEX={participant.current_task_index}")
+        else:
+            qualtrics_url = (f"{QUALTRICS_URLS['post_task']}"
+                             f"?TASK_INDEX={session['current_task_index']}")
         
-        return jsonify({"redirect": questionnaire_url})
+        return jsonify({"redirect": qualtrics_url})
     except Exception as e:
         logging.error(f"Error in end_task: {str(e)}")
         return jsonify({"error": "An error occurred while ending the task"}), 500
+
 @app.route('/next_task')
-@login_required
 def next_task():
-    session['current_task_index'] += 1
-    if session['current_task_index'] >= len(session['task_order']):
-        logging.info(f"User {current_user.id} completed all tasks")
-        return redirect(url_for('exit_questionnaire'))
-    logging.info(f"User {current_user.id} moved to next task")
-    return redirect(url_for('pre_task_questionnaire'))
+    if 'DYNO' in os.environ:  # Check if running on Heroku
+        prolific_pid = request.args.get('PROLIFIC_PID')
+        study_id = request.args.get('STUDY_ID')
+        session_id = request.args.get('SESSION_ID')
+        
+        participant = Participant.query.get(prolific_pid)
+        if not participant:
+            return "Participant not found", 404
+        
+        participant.current_task_index += 1
+        db.session.commit()
+        
+        if participant.current_task_index >= 4:
+            logging.info(f"Participant {prolific_pid} completed all tasks")
+            return redirect(url_for('exit_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
+        logging.info(f"Participant {prolific_pid} moved to next task")
+        return redirect(url_for('pre_task_questionnaire', PROLIFIC_PID=prolific_pid, STUDY_ID=study_id, SESSION_ID=session_id))
+    else:
+        session['current_task_index'] += 1
+        if session['current_task_index'] >= len(session['task_order']):
+            logging.info(f"User completed all tasks")
+            return redirect(url_for('exit_questionnaire'))
+        logging.info(f"User moved to next task")
+        return redirect(url_for('pre_task_questionnaire'))
 
 @app.route('/exit_questionnaire')
-@login_required
 def exit_questionnaire():
-    logging.info(f"User {current_user.id} directed to exit questionnaire")
-    return redirect(QUALTRICS_URLS['exit'])
+    if 'DYNO' in os.environ:  # Check if running on Heroku
+        prolific_pid = request.args.get('PROLIFIC_PID')
+        study_id = request.args.get('STUDY_ID')
+        session_id = request.args.get('SESSION_ID')
+        
+        qualtrics_url = (f"{QUALTRICS_URLS['exit']}"
+                         f"?PROLIFIC_PID={prolific_pid}"
+                         f"&STUDY_ID={study_id}"
+                         f"&SESSION_ID={session_id}")
+        
+        return redirect(qualtrics_url)
+    else:
+        logging.info(f"User directed to exit questionnaire")
+        return redirect(QUALTRICS_URLS['exit'])
+
+@app.route('/experiment_complete')
+def experiment_complete():
+    prolific_pid = request.args.get('PROLIFIC_PID')
+    completion_code = 'COMP' + prolific_pid[:8]
+    return redirect(f"https://app.prolific.co/submissions/complete?cc={completion_code}")
+
 @app.route('/check_tasks')
 def check_tasks():
     tasks = Task.query.all()
     return jsonify([{"id": task.id, "principle": task.principle, "description": task.description} for task in tasks])
+
 @app.route('/thank_you')
 def thank_you():
-    logging.info(f"User {current_user.id} completed the experiment")
+    logging.info(f"User completed the experiment")
     return render_template('thank_you.html')
-
 def get_bot_response(session_id, user_message, principle):
     try:
         session = db.session.get(Session, session_id)
